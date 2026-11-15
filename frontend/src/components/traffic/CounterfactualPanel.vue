@@ -51,7 +51,22 @@ function buildNational(payload){
   const axis=payload?.counterfactual?.modelAxis
   const total=(payload?.flights||[]).length
   if(!axis||!axis.applicable){
-    return {status:'NO_MODEL', note:'本帧未取得模型概率（限流或模型文件缺失），无法生成模型轴，不以 0 差异的对照代填。'}
+    // 三种"没有模型轴"的原因要分开说：配额用尽可以等，模型缺失要修，网络错误要看下一帧。
+    // 原来统一写"限流或模型文件缺失"，读到的人只能猜——而线上真实原因是上游 429 配额耗尽。
+    const fb=payload?.modelCard?.fallback||{}
+    const retry=String(fb.retryAt||'')
+    const when=retry.length>=16?retry.slice(11,16)+' UTC':''
+    let note
+    if(fb.rateLimited){
+      note='上游气象配额已用尽（429），本帧取不到逐市小时数据，模型概率为空'
+        +(when?`，${when} 后可再试`:'')+'；规则分与绕飞几何不受影响，模型轴不给 0 差异的假对照。'
+    }else if(fb.error||fb.reason){
+      note='本帧未取得模型概率（'+String(fb.error||fb.reason)+'），无法生成模型轴，不以 0 差异的对照代填。'
+    }else{
+      note='本帧未取得模型概率，无法生成模型轴，不以 0 差异的对照代填。'
+    }
+    return {status:'NO_MODEL', statusText:fb.rateLimited?'模型概率缺失·上游配额用尽':'模型概率缺失',
+            note, retryAt:retry, rateLimited:!!fb.rateLimited}
   }
   const k=axis.changedCount||0
   const withModel=axis.withModel||{}, withoutModel=axis.withoutModel||{}
@@ -164,7 +179,7 @@ function pctText(v){return typeof v==='number'?`${v>0?'+':''}${v}%`:'—'}
     <button @click="switchScope('')">改看全国层</button>
   </p>
   <p class="cf-state" v-else-if="d&&!ready">
-    对照不可用（{{ d.status }}）<span v-if="d.note"> · {{ d.note }}</span>
+    对照不可用（{{ d.statusText||d.status }}）<span v-if="d.note"> · {{ d.note }}</span>
     <button @click="polls=0;load()">重试</button>
   </p>
 

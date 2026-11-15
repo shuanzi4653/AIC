@@ -142,6 +142,9 @@ def _city_weather() -> Dict[str, Dict[str, Any]]:
 # 模型概率取不到的原因。留在这里供 modelCard.error 下发 ——
 # 只返回空字典而不说为什么，界面就只能写"没取到"，说不清是限流还是模型坏了。
 _MODEL_ERROR = ''
+# 同一件事的结构化版本：界面要能区分"今天没了（429）"与"模型文件不在"，
+# 并且把"什么时候能再试"直接写出来，而不是让人反复点重试。
+_MODEL_STATE: Dict[str, Any] = {}
 
 
 def _model_probs() -> Dict[str, float]:
@@ -149,18 +152,40 @@ def _model_probs() -> Dict[str, float]:
 
     取不到就给空字典，**并把原因记到 `_MODEL_ERROR`**；调用方据此把 probSource
     标成 RULE 并把原因下发。这是"模型不可用要说出来"，不是静默降级。
+
+    V1.1.2 补：`city_hourly.fetch` 现在会把 429 与恢复时刻一起交回来，
+    这里原样保留——只写一句"可能被限流"，用户没有任何可行动的信息。
     """
-    global _MODEL_ERROR
+    global _MODEL_ERROR, _MODEL_STATE
     try:
         from ml import national_model
         from weather import city_hourly
         rows = [{'name': row['name'], 'lat': row['lat'], 'lon': row['lon']} for row in _city_rows()]
         payload = city_hourly.fetch(rows)
         got = national_model.probability_map(payload.get('cities') or {})
-        _MODEL_ERROR = '' if got else '逐市小时数据为空（可能被限流）'
+        _MODEL_STATE = {
+            'rateLimited': bool(payload.get('rateLimited')),
+            'retryAt': payload.get('retryAt') or '',
+            'reason': payload.get('reason') or '',
+            'cities': len(got),
+            'fetchedAt': payload.get('fetchedAt'),
+            'errors': list(payload.get('errors') or [])[:3],
+        }
+        if got:
+            _MODEL_ERROR = ''
+        elif payload.get('rateLimited'):
+            _MODEL_ERROR = '上游配额用尽（429）'
+            if payload.get('retryAt'):
+                _MODEL_ERROR += f'，{payload["retryAt"]} 后可再试'
+        elif payload.get('reason'):
+            _MODEL_ERROR = str(payload['reason'])[:120]
+        else:
+            _MODEL_ERROR = '逐市小时数据为空（未取到任何城市）'
         return got
     except Exception as exc:  # noqa: BLE001 - 模型或数据源不可用不能把页面打崩
         _MODEL_ERROR = f'{type(exc).__name__}: {str(exc)[:80]}'
+        _MODEL_STATE = {'rateLimited': False, 'retryAt': '', 'reason': _MODEL_ERROR,
+                        'cities': 0, 'errors': [_MODEL_ERROR]}
         return {}
 
 
@@ -924,6 +949,16 @@ def _summary(provinces: List[Dict[str, Any]], corridors: List[Dict[str, Any]],
         else:
             by_kind['INTRA'] += 1
     local = [row for row in nodes if not row.get('external')]
+    observed = sum(1 for row in local if row.get('weather'))
+    total_local = len(local)
+    # 覆盖不足时不能只写"逐市实况"四个字：2026-11-15 上游 429，实际只有 80/319 城有数，
+    # 而页面照样写"逐市实况"，于是"无实况按未知处理→放行"这件事在界面上完全看不出来。
+    coverage = {
+        'observed': observed,
+        'total': total_local,
+        'ratio': round(observed / total_local, 3) if total_local else 0.0,
+        'degraded': bool(total_local and observed < total_local * 0.9),
+    }
     return {
         'provinces': len(provinces),
         'cities': len(local),
@@ -932,8 +967,10 @@ def _summary(provinces: List[Dict[str, Any]], corridors: List[Dict[str, Any]],
         'feedCities': sum(1 for row in local if not row['hasAirport']),
         'corridors': len(corridors),
         'byKind': by_kind,
-        'weatherSource': 'open-meteo current（公开、免密钥，逐市）',
-        'weatherCities': sum(1 for row in nodes if row.get('weather')),
+        'weatherSource': ('open-meteo current + wttr.in（公开、免密钥，逐市）'
+                          if coverage['degraded'] else 'open-meteo current（公开、免密钥，逐市）'),
+        'weatherCities': observed,
+        'weatherCoverage': coverage,
         'lowVisCities': sum(1 for row in nodes if (row.get('weather') or {}).get('low')),
         'stations': len(stations),
         # 全国层用逐市实况，不再是 METAR 报文；标签保留但语义已改，界面上写"逐市实况点"
@@ -1790,6 +1827,13 @@ def _model_card(model_probs: Optional[Dict[str, float]] = None) -> Dict[str, Any
                 'note': ('全国模型概率本帧未取到，已退回规则分（不含模型分量）'
                          + (f'：{_MODEL_ERROR}' if _MODEL_ERROR else '')),
                 'error': _MODEL_ERROR or '未取到',
+                # 结构化原因：前端据此区分"配额用尽（等恢复）"与"模型/文件问题（要修）"，
+                # 并且能把 retryAt 直接显示出来 —— 文案里写"限流或文件缺失"等于让人猜。
+                'reason': (_MODEL_STATE or {}).get('reason') or '',
+                'rateLimited': bool((_MODEL_STATE or {}).get('rateLimited')),
+                'retryAt': (_MODEL_STATE or {}).get('retryAt') or '',
+                'modelCities': int((_MODEL_STATE or {}).get('cities') or 0),
+                'sourceErrors': list((_MODEL_STATE or {}).get('errors') or [])[:3],
             }
     cards = sorted((model_probs or {}).values(), reverse=True)
     card['liveCoverage'] = {
