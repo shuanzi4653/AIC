@@ -160,7 +160,11 @@ def _model_probs() -> Dict[str, float]:
     try:
         from ml import national_model
         from weather import city_hourly
-        rows = [{'name': row['name'], 'lat': row['lat'], 'lon': row['lon']} for row in _city_rows()]
+        # 顺序有讲究：上游按批取数，额度紧张时后面的批次会 429 被跳过
+        # （2026-11-15 实测：4 批只成 3 批，240/319 城）。所以把省会与机场城市排前面，
+        # 保证"能起降的城市"先有模型概率 —— 这条与 city_weather 的补数顺序同一逻辑。
+        rows = [{'name': row['name'], 'lat': row['lat'], 'lon': row['lon']}
+                for row in sorted(_city_rows(), key=lambda r: (r.get('rank', 3), r['name']))]
         payload = city_hourly.fetch(rows)
         got = national_model.probability_map(payload.get('cities') or {})
         _MODEL_STATE = {
