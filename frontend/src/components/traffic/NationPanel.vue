@@ -8,6 +8,8 @@ import NationMap from './NationMap.vue'
 import { TH } from '../../traffic/thresholds.js'
 import NationBriefing from './NationBriefing.vue'
 import {parseScope,scopeKey} from '../../traffic/scope.js'
+import {digestText,downloadEvidencePng} from '../../traffic/evidenceCard.js'
+import {isStage,STAGE} from '../../traffic/stageMode.js'
 
 // 首页首屏用不到它，没必要为它多等一个 chunk。
 
@@ -247,6 +249,44 @@ async function explainReading(){
   finally{readingBusy.value=false}
 }
 function clearEvidence(){evidence.value=null;evidenceErr.value='';reading.value=null;readingErr.value=''}
+
+// —— 证据链"能带走"（V1.1.3）——
+// 复制要点：一行一个事实，直接粘进答辩备注；存图：用同一份 JSON 排一张 1600 宽的卡片，
+// 图上数字与页面同源，避免现场截屏拿错帧（P5 要的是这一张，不是手机拍的屏）。
+const evidenceFlash=ref('')
+let flashTimer=null
+function flash(text){
+  evidenceFlash.value=text
+  if(flashTimer)clearTimeout(flashTimer)
+  flashTimer=setTimeout(()=>{evidenceFlash.value=''},2600)
+}
+async function copyEvidence(){
+  const text=digestText(evidence.value)
+  if(!text){flash('还没有可复制的取证结果');return}
+  try{
+    if(!navigator.clipboard||!navigator.clipboard.writeText)throw new Error('NO_CLIPBOARD')
+    await navigator.clipboard.writeText(text)
+    flash('已复制 '+text.split('\n').length+' 行要点')
+  }catch(_){
+    flash('剪贴板不可用（需 https 或 localhost）')
+  }
+}
+async function saveEvidence(){
+  const ok=await downloadEvidencePng(evidence.value,`evidence-${(evidence.value?.flight?.id||'flight')}.png`)
+  flash(ok?'已保存 PNG':'存图失败')
+}
+
+// 舞台模式：?stage=1&flight=<id> —— 载荷到位后自动选那一班并取一次证。
+// 只做一次（stagePicked），之后用户怎么点都不再干预。
+const stagePicked=ref(false)
+watch(flights,(list)=>{
+  if(!isStage()||stagePicked.value||!STAGE.flight)return
+  const hit=(list||[]).find(f=>f.id===STAGE.flight)
+  if(!hit)return
+  stagePicked.value=true
+  selectedId.value=hit.id
+  loadEvidence()
+})
 
 // 定位/复位只对平面图这一套。
 const globeRef=ref(null)   // 已下线三维，保留 ref 只为兼容模板里的旧引用
@@ -1220,6 +1260,9 @@ onUnmounted(()=>{
             <b>取证链</b>
             <span>{{ evidence.conclusion }}</span>
             <em>{{ evidence.steps.length }} 步 · {{ evidence.generatedAt }}</em>
+            <button type="button" class="ev-tool" data-evidence-copy @click="copyEvidence()">复制要点</button>
+            <button type="button" class="ev-tool" data-evidence-png @click="saveEvidence()">存图</button>
+            <i v-if="evidenceFlash" class="ev-flash">{{ evidenceFlash }}</i>
             <!-- 模型状态做成一枚小标：已配置就只报"能用 + 走的哪个文件"，不占正文；
                  未配置才展开那段可执行的说明（琥珀色，属于"要你动手"的话）。 -->
             <i class="ev-llm" :class="{off:!evidence.llm?.configured}"
@@ -1668,6 +1711,9 @@ html[data-theme="light"] .nrn-alert-go{color:#0b7ea6}
 .ev-step code.PUBLIC{color:#7fe0bb;background:rgba(70,190,150,.14)}
 .ev-step code.DERIVED{color:#ffd479;background:rgba(245,190,60,.14)}
 .ev-step code.OFFICIAL{color:#c6b4ff;background:rgba(160,140,255,.14)}
+.ev-tool{margin-left:6px;padding:1px 7px;font-size:10.5px;border-radius:3px;cursor:pointer;border:1px solid rgba(120,170,200,.45);background:rgba(30,70,100,.3);color:#d6ecfa}
+.ev-tool:hover{background:rgba(60,130,170,.4)}
+.ev-flash{font-style:normal;margin-left:6px;font-size:10.5px;color:#7fe0bb}
 .ev-note{margin:6px 0 0;font-size:10.5px;color:#ffcf7a;line-height:1.6}
 .ev-read{margin:8px 0 2px;padding:8px 10px;border-left:2px solid var(--alc-line);background:rgba(30,70,100,.14)}
 .ev-read-btn{font-size:10.5px;padding:3px 9px;border-radius:4px;border:1px solid rgba(120,170,200,.45);

@@ -3,6 +3,7 @@ import {computed,onBeforeUnmount,onMounted,onUnmounted,ref,watch,nextTick} from 
 import {requestJson,postAction,operatorRole,setOperatorRole} from '../api.js'
 import OperationsConsole from './OperationsConsole.vue'
 import {isCaseMode, caseQuery, caseMeta} from '../traffic/caseMode.js'
+import {isStage, STAGE} from '../traffic/stageMode.js'
 import WeatherSourceSwitch from './traffic/WeatherSourceSwitch.vue'
 import NationPanel from './traffic/NationPanel.vue'
 import NationBriefing from './traffic/NationBriefing.vue'
@@ -88,6 +89,10 @@ function onPaletteRun(item){
 const network=ref(null),session=ref(null),weather=ref(null),error=ref(''),busy=ref(false)
 const weatherMode=ref(WEATHER_MODE_MEASURED),weatherModeStatus=ref(null)
 const seed=ref(42),scenario=ref('live'),city=ref(''),minute=ref(60),playing=ref(false),speed=ref(1)
+// 舞台模式：帧先钉死。现场拖错一格，讲稿里的数就对不上（V1.1.3）。
+if(isStage()&&STAGE.minute!=null)minute.value=STAGE.minute
+// 帧锁定：只挡「被改走」，不改播放逻辑本身。
+watch(minute,(v)=>{if(isStage()&&STAGE.minute!=null&&v!==STAGE.minute)minute.value=STAGE.minute})
 const showCar=ref(true),showDelivery=ref(true),showWeather=ref(true),showWind=ref(true),showFixedZones=ref(true),showRadar=ref(true)
 const showFog=ref(true)
 const showEvents=ref(true),showObservations=ref(true),search=ref(''),status=ref('ALL'),page=ref(1),selectedId=ref(''),scene=ref(null)
@@ -214,7 +219,9 @@ onMounted(()=>{
   applyHash()
   window.addEventListener('hashchange',applyHash)
   window.addEventListener('popstate',onPopState)
-  try{ firstVisit.value=!localStorage.getItem('alc.visited') }catch(e){ firstVisit.value=false }
+  // 舞台模式一律不弹首访浮层：演示机可能是第一次打开这台浏览器，浮层正好盖住地图。
+  if(isStage())firstVisit.value=false
+  else try{ firstVisit.value=!localStorage.getItem('alc.visited') }catch(e){ firstVisit.value=false }
   if(firstVisit.value)startTour(false)
   if(firstVisit.value)window.setTimeout(()=>dismissFirstVisit(),4000)
 })
@@ -736,7 +743,7 @@ onUnmounted(()=>{
   if(relayRetryTimer)clearTimeout(relayRetryTimer);disposed=true;++generation;++weatherGeneration;window.removeEventListener('keydown',onGlobalKey);clearTimeout(poll);clearInterval(timer);clearInterval(buildClock)})
 </script>
 <template>
-<main ref="workbench" class="traffic-workbench" :class="{'map-expanded':mapExpanded&&activeSection==='overview','overview-mode':activeSection==='overview','page-mode':activeSection!=='overview'}">
+<main ref="workbench" class="traffic-workbench" :class="{'map-expanded':mapExpanded&&activeSection==='overview','overview-mode':activeSection==='overview','page-mode':activeSection!=='overview','stage-mode':isStage()}">
   <p class="wb-demo-bar" v-if="demoMode" data-demo-bar>
     演示模式（<code>?demo=1</code>）：底图与雷达瓦片不再外取，气象以本帧快照为准；页面上的“实时”字样本次不成立。
   </p>
@@ -960,7 +967,10 @@ onUnmounted(()=>{
 .traffic-summary>div{background:linear-gradient(180deg,rgba(61,139,255,.055),transparent 42%)}
 .traffic-playback{background:linear-gradient(180deg,rgba(17,38,72,.92),rgba(9,22,44,.92))!important;box-shadow:inset 0 1px 0 rgba(120,180,255,.09)}
 .operations-nav{box-shadow:inset 0 1px 0 rgba(120,180,255,.09)}
-.wb-theme{border:1px solid #2c4a60;background:rgba(18,38,54,.7);color:#bcd7e8;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap}.wb-theme:hover{background:rgba(40,86,112,.7);color:#e6f6ff}.wb-theme[aria-pressed="true"]{background:#e3f0fb;border-color:#7fb3d8;color:#0d4f74}.traffic-workbench.page-mode{overflow-y:auto}.traffic-workbench.page-mode .traffic-main,.traffic-workbench.page-mode .traffic-playback,.traffic-workbench.page-mode .traffic-overview-playback,.traffic-workbench.page-mode .traffic-secondary-head,.traffic-workbench.page-mode .traffic-overview-pointer{display:none}
+.wb-theme{border:1px solid #2c4a60;background:rgba(18,38,54,.7);color:#bcd7e8;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;white-space:nowrap}.wb-theme:hover{background:rgba(40,86,112,.7);color:#e6f6ff}.wb-theme[aria-pressed="true"]{background:#e3f0fb;border-color:#7fb3d8;color:#0d4f74}.traffic-workbench.page-mode{overflow-y:auto}
+/* 舞台模式：把时间轴整条藏掉。现场手放上去就会拖帧，而 8 分钟里没人会去拖它；
+   藏掉之后页面少一行可误触的东西，帧也不会漂（V1.1.3）。 */
+.traffic-workbench.stage-mode .traffic-playback,.traffic-workbench.stage-mode .traffic-overview-playback{display:none!important}.traffic-workbench.page-mode .traffic-main,.traffic-workbench.page-mode .traffic-playback,.traffic-workbench.page-mode .traffic-overview-playback,.traffic-workbench.page-mode .traffic-secondary-head,.traffic-workbench.page-mode .traffic-overview-pointer{display:none}
 .traffic-workbench button,.traffic-workbench select,.traffic-workbench input:not([type=checkbox]):not([type=range]){background:#122334;color:#bcd3e2;border:1px solid #294153;border-radius:6px;padding:8px 11px;font:inherit}.traffic-workbench button{cursor:pointer}.traffic-workbench button:hover{border-color:#65cce5;color:white}.traffic-workbench button:disabled{opacity:.45;cursor:default}.traffic-workbench button.primary{background:#246279;color:#effcff;border-color:#398098}.traffic-workbench input[type=checkbox]{accent-color:#59dffc}.traffic-workbench input[type=range]{accent-color:#59dffc;min-width:100px}
 .traffic-header{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto) minmax(0,1fr);gap:20px;align-items:center;margin-bottom:14px}
 .traffic-header>.traffic-brand{grid-column:2;display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;min-width:0;max-width:100%;justify-self:center}
