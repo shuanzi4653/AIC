@@ -30,10 +30,40 @@ const caseLabel=computed(()=>{
   const meta=caseMeta()||{}
   return effectiveCase.value===(activeCase()||'')&&meta.label?meta.label:'2025-01-05 沈阳大雾'
 })
-function switchScope(next){scope.value=next;polls=0;data.value=null;load()}
+// 案例重放要重跑整份计划（首次 40–90 秒，冷启动实测最慢 171 秒）。V1.1.2 之前
+// 一进页面就自动发请求：30 秒超时 → 立刻重试 → 最多 40 次，屏幕上没有任何可以停的
+// 东西，用户看到的就是"卡死"（2026-11-23 复核）。现在三处收紧：
+//   ① 显式开始（带 ?case= 也不再自动触发）；② 退避 + 上限；③ 随时可中止。
+const caseArmed=ref(false)
+const caseAborted=ref(false)
+const caseWait=ref(0)
+let waitTimer=null
+function startWait(){
+  // 轮询会反复进来：已经在计时就不要再把秒数清零，否则屏幕上永远显示"已等 0 秒"。
+  if(waitTimer)return
+  caseWait.value=0
+  waitTimer=setInterval(()=>{caseWait.value+=1},1000)
+}
+function stopWait(){if(waitTimer){clearInterval(waitTimer);waitTimer=null}}
+function startCase(){
+  // 从全国层点"开始重放"时 scope 还是空的：不补这一行，effectiveCase 仍为空，
+  // 请求会退回全国层 —— 按钮看起来没反应。
+  if(!activeCase()&&scope.value!=='case')scope.value='case'
+  caseArmed.value=true;caseAborted.value=false;polls.value=0;data.value=null;error.value=''
+  load()
+}
+function abortWait(){stopPolling();stopWait();caseAborted.value=true;loading.value=false}
+function retryNow(){polls.value=0;caseAborted.value=false;load()}
+function switchScope(next){
+  scope.value=next;polls.value=0;data.value=null;caseAborted.value=false
+  caseArmed.value=next==='case'
+  load()
+}
 const POLL_MS=3000
-const MAX_POLLS=40
-let timer=null,disposed=false,polls=0
+const MAX_POLLS=8
+let timer=null,disposed=false
+const polls=ref(0)
+
 const POLICIES=[
   {key:'conservative',label:'保守',note:'事故代价 20 000（宁可误停）'},
   {key:'balanced',label:'均衡',note:'事故代价 10 000（默认）'},
@@ -110,30 +140,40 @@ async function loadNational(){
 async function load(silent=false){
   if(disposed)return
   if(!effectiveCase.value){await loadNational();return}
+  // 未显式开始就一个请求都不发：带 ?case= 打开本页时，页面只给按钮，不自己开跑。
+  if(!caseArmed.value)return
   if(!silent)loading.value=true
+  startWait()
   try{
-    const payload=await requestJson(`/api/traffic/v2/counterfactual?seed=42&scenario=live&policy=${policy.value}${cfCaseQuery.value}`,{timeoutMs:30000})
+    const payload=await requestJson(`/api/traffic/v2/counterfactual?seed=42&scenario=live&policy=${policy.value}${cfCaseQuery.value}`,{timeoutMs:45000})
     if(disposed)return
     data.value=payload
     error.value=''
     // BUSY 与 BUILDING 是同一件事的两种回报：计划正在别处建、或本请求触发了建场。
     // 以前只认 BUILDING，于是拿到 BUSY 就停在"对照不可用（BUSY）"不动 —— 用户只能靠点重试。
-    if((payload?.status==='BUILDING'||payload?.status==='BUSY')&&polls<MAX_POLLS){
-      polls+=1
+    if((payload?.status==='BUILDING'||payload?.status==='BUSY')
+        && polls.value<MAX_POLLS&&!caseAborted.value){
+      polls.value+=1
       stopPolling()
-      timer=setTimeout(()=>load(true),POLL_MS)
+      // 退避：3 → 5 → 9 → 15 → 15 …。固定 3 秒连打 40 次，既拖垮自己也让后端更慢。
+      const delay=Math.min(POLL_MS*Math.pow(1.7,polls.value-1),15000)
+      timer=setTimeout(()=>load(true),delay)
     }else{
-      stopPolling()
+      stopPolling();stopWait()
     }
   }catch(e){
-    if(!disposed)error.value=e.message
+    if(!disposed){
+      // 超时不再当成"再来一次"：直接停轮询，把决定权交回给人。
+      stopPolling();stopWait()
+      error.value=(e&&e.message)?e.message:String(e)
+    }
   }finally{
-    if(!disposed&&!silent)loading.value=false
-    else if(!disposed)loading.value=false
+    if(!disposed)loading.value=false
   }
 }
-onMounted(()=>{polls=0;load()})
-onBeforeUnmount(()=>{disposed=true;stopPolling()})
+onMounted(()=>{polls.value=0;if(!effectiveCase.value)load()})
+onBeforeUnmount(()=>{disposed=true;stopPolling();stopWait()})
+
 
 const d=computed(()=>data.value||null)
 const ready=computed(()=>d.value?.status==='OK')
@@ -165,22 +205,41 @@ function pctText(v){return typeof v==='number'?`${v>0?'+':''}${v}%`:'—'}
     <template v-if="effectiveCase">案例重放 · {{ caseLabel }}（初赛会话口径，与首页全国帧不是同一套数据）</template>
     <template v-else>全国单帧 · 含模型 / 不含模型按 T+{{ minuteLabel }} 重算，与首页同一帧</template>
   </p>
-  <p class="cf-state" v-if="loading&&!d">正在读取反事实对照…</p>
-  <p class="cf-state bad" v-else-if="error">对照不可用 · {{ error }}</p>
+  <p class="cf-state" v-if="effectiveCase&&!caseArmed" data-cf-armed>
+    案例重放要重跑整份计划（首次 40–90 秒，冷启动最慢实测 171 秒），<b>不会自动开始</b>。
+    只想知道"含模型 / 不含模型差多少"，点右边全国层即可，那一份是即时的。
+    <button data-cf-start @click="startCase()">开始重放 · {{ caseLabel }}</button>
+    <button @click="switchScope('')">改看全国层</button>
+  </p>
+  <p class="cf-state" v-else-if="loading&&!d">正在读取反事实对照…{{ caseArmed?'（已等 '+caseWait+' 秒）':'' }}</p>
+  <p class="cf-state bad" v-else-if="error">
+    对照不可用 · {{ error }}
+    <template v-if="effectiveCase">
+      <button @click="startCase()">重新开始</button>
+      <button @click="switchScope('')">改看全国层</button>
+    </template>
+    <button v-else @click="load()">重试</button>
+  </p>
   <p class="cf-state" v-else-if="d&&!ready&&building">
     <span aria-hidden="true" class="cf-spin"></span>
     运行计划还在生成（{{ d.progress!=null?d.progress+'%':'进度未报告' }}）·
-    反事实要等同一份计划算完，本页每 {{POLL_MS/1000}} 秒自动重试（第 {{ polls }}/{{ MAX_POLLS }} 次）
+    已等 {{ caseWait }} 秒 · 第 {{ polls }}/{{ MAX_POLLS }} 次检查
     <span class="cf-bar" role="progressbar" :aria-valuenow="d.progress||0" aria-valuemin="0" aria-valuemax="100">
       <i :style="{width:Math.max(0,Math.min(100,d.progress||0))+'%'}"></i>
     </span>
     <span class="cf-eta">案例重放要重跑整份计划（首次 40–90 秒，缓存后即时）；看全国层的即时对照请点下面的按钮。</span>
     <span v-if="d.note"> · {{ d.note }}</span>
+    <button @click="abortWait()">停止等待</button>
+    <button @click="switchScope('')">改看全国层</button>
+  </p>
+  <p class="cf-state" v-else-if="caseAborted&&!d">
+    已停止等待案例重放（计划可能仍在后台生成）。
+    <button @click="startCase()">继续等</button>
     <button @click="switchScope('')">改看全国层</button>
   </p>
   <p class="cf-state" v-else-if="d&&!ready">
     对照不可用（{{ d.statusText||d.status }}）<span v-if="d.note"> · {{ d.note }}</span>
-    <button @click="polls=0;load()">重试</button>
+    <button @click="retryNow()">重试</button>
   </p>
 
   <template v-else-if="ready">
@@ -222,7 +281,7 @@ function pctText(v){return typeof v==='number'?`${v>0?'+':''}${v}%`:'—'}
     </p>
     <p class="cf-notice live" v-else-if="caseNote==='live'" data-cf-notice="live">
       <b>实时气象</b> · 当前无风险走廊 · 两组均为 0 架次。
-      <button class="cf-switch" @click="switchScope('case')">切到 {{ caseLabel }}</button>
+      <button class="cf-switch" @click="startCase()">切到 {{ caseLabel }}</button>
     </p>
 
     <p class="cf-head" v-if="head" :class="head.saved>0?'good':'flat'">

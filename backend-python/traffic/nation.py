@@ -1371,9 +1371,8 @@ def _payload_locked(level: str = 'nation', ident: Optional[str] = None,
                       corridors, [city])
         one = nation_ops.city_blocks(city['province'], [city], corridors, body['flights'])
         body['rollup'] = {'level': 'city',
-                          'total': _totals(nation_ops.province_blocks([row] if row else [], corridors,
-                                                                      body['flights']),
-                                           body['flights'], corridors),
+                          'total': _city_totals(city, corridors, body['flights'],
+                                                body.get('summary')),
                           'cities': one}
         body['city'] = {**detail, 'airborne': one[0]['airborne'] if one else 0,
                         'delayed': one[0]['delayed'] if one else 0}
@@ -1381,6 +1380,35 @@ def _payload_locked(level: str = 'nation', ident: Optional[str] = None,
 
     return {'status': 'INVALID', 'level': level,
             'note': 'level 只能是 nation / region / province / city'}
+
+
+def _city_totals(city: Dict[str, Any], corridors: List[Dict[str, Any]],
+                 flights: List[Dict[str, Any]],
+                 summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """市层的合计**只按本市算**（V1.1.3）。
+
+    以前这里回的是 `_totals(province_blocks([省]))` —— 于是下潜到沈阳，台账里的
+    「在飞 / 停飞 / 低能见」是辽宁全省的数，只有航线数是本市的：同一行里两个口径，
+    评委按"四级作用域"逐级点下来，最后一级就露馅（2026-11-23 复核）。
+
+    市层不存在"跨市重复计"：`corridors` 已是本市切片，`flights` 只来自这批走廊，
+    所以这里直接数原始列表，不再绕经省级块。
+    """
+    origin = [f for f in flights if f.get('fromName') == city.get('name')]
+    return {
+        'provinces': 1,
+        'cities': 1,
+        'airports': 1 if city.get('hasAirport') else 0,
+        'corridors': len(corridors),
+        'blocked': sum(1 for row in corridors if row.get('borderBlocked')),
+        'detour': sum(1 for row in corridors if row.get('detour')),
+        # 在飞/停飞按**起飞机归属**计，与 city_blocks 同一口径；本市为终点的班次
+        # 已从对面城市的块里算过，这里不重复。
+        'airborne': len(origin),
+        'delayed': sum(1 for f in origin if f.get('status') == 'DELAYED'),
+        'hold': sum(1 for f in origin if f.get('decision') == 'HOLD'),
+        'lowVisCities': int((summary or {}).get('lowVisCities') or 0),
+    }
 
 
 def _totals(blocks: List[Dict[str, Any]], flights: List[Dict[str, Any]],

@@ -298,6 +298,15 @@ def crossings(stamp: str, policy: str = 'APPROVAL_REQUIRED') -> Dict[str, Any]:
         'corridors': corridor_count,
         'hit': hit_count,
         'ratio': round(hit_count / max(1, corridor_count), 3),
+        # 穿越条数（hit）是几何量，两档必然相同；**能不能穿**才是策略量。
+        # 拆开给，界面就有两档真正不同的数可报：待审 113 / 禁止 0 ↔ 待审 0 / 禁止 113。
+        # 以前只给 hit，切档后屏幕上唯一变化的是那行小字，读起来像"没生效"。
+        'counts': {
+            'corridors': corridor_count,
+            'crossingCorridors': hit_count,
+            'enterable': 0 if strict else hit_count,
+            'forbidden': hit_count if strict else 0,
+        },
         'rows': rows[:120],
         'note': note,
     }

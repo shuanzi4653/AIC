@@ -390,7 +390,8 @@ function clock(m){
         <p v-if="zones.available" class="nb-zone-line">
           净空（规则化生成，非官方公布）：<b>{{ zones.counts.airports }}</b> 机场 ·
           限制区 <b>{{ zones.counts.limitZones }}</b> 个 · 覆盖 <b>{{ ((zones.counts.coverageRatio||0)*100).toFixed(2) }}%</b> 陆域 ·
-          待审穿越 <b>{{ zones.crossings ? zones.crossings.hit+'/'+zones.crossings.corridors : '见「空域视角」' }}</b>
+          {{ zones.policy==='PROHIBITED'?'禁止穿越':'待审穿越' }}
+          <b>{{ zones.crossings ? ((zones.policy==='PROHIBITED'? (zones.crossings.counts?.forbidden ?? zones.crossings.hit) : (zones.crossings.counts?.enterable ?? zones.crossings.hit))+'/'+zones.crossings.corridors) : '见「空域视角」' }}</b>
         </p>
       </div>      <div class="nb-scroll">
         <table>

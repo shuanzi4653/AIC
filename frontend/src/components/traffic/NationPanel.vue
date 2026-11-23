@@ -1125,7 +1125,8 @@ onUnmounted(()=>{
         <p><span>受限额</span><b>{{ zoneCounts.airports||0 }} 机场</b></p>
         <p><span>限制区</span><b>{{ zoneCounts.limitZones||0 }} 个 · {{ zoneCounts.coverageSqKm||0 }} km²</b></p>
         <p><span>覆盖率</span><b>{{ ((zoneCounts.coverageRatio||0)*100).toFixed(2) }}% 陆域</b></p>
-        <p><span>待审穿越</span><b v-if="zoneCrossings">{{ zoneCrossings.hit }} / {{ zoneCrossings.corridors }} 条（{{ ((zoneCrossings.ratio||0)*100).toFixed(0) }}%）</b><b v-else>—</b></p>
+        <p><span>{{ zonePolicy==='PROHIBITED'?'禁止穿越':'待审穿越' }}</span><b v-if="zoneCrossings">{{ zoneCrossings.counts? (zonePolicy==='PROHIBITED'?zoneCrossings.counts.forbidden:zoneCrossings.counts.enterable) : zoneCrossings.hit }} / {{ zoneCrossings.corridors }} 条（{{ ((zoneCrossings.ratio||0)*100).toFixed(0) }}%）</b><b v-else>—</b></p>
+        <p v-if="zoneCrossings?.counts"><span>穿越几何</span><b>{{ zoneCrossings.counts.crossingCorridors }} 条（两档相同，变的是能否穿越）</b></p>
         <ul v-if="(zoneCrossings?.rows||[]).length">
           <li v-for="row in (zoneCrossings.rows||[]).slice(0,6)" :key="row.id">
             <b>{{ row.place }}</b>
