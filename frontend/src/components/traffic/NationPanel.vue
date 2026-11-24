@@ -1210,7 +1210,9 @@ onUnmounted(()=>{
       <header>
         <b>{{ selectedFlight.callsign }}</b>
         <code>{{ selectedFlight.id }}</code>
-        <span class="tag" :class="selectedFlight.riskLevel==='HIGH'?'bad':(selectedFlight.riskLevel==='MEDIUM'?'warn':'good')">{{ selectedFlight.decisionLabel }}</span>
+        <!-- 标签写的是裁决，颜色就必须跟裁决：以前按 riskLevel 染，于是"绕飞放行"被染成红底
+             高风险的样式，读者一眼读成"禁止"（V1.1.4）。风险数值另有颜色，在「裁决依据」那栏。 -->
+        <span class="tag" :class="selectedFlight.decision==='HOLD'?'bad':(selectedFlight.decision==='DETOUR'?'warn':'good')">{{ selectedFlight.decisionLabel }}</span>
         <button class="follow" :class="{on:followId===selectedFlight.id}" @click="toggleFollow">
           {{ followId===selectedFlight.id?'取消跟随':'跟随此班次' }}</button>
         <button class="follow" :disabled="evidenceBusy" @click="loadEvidence">

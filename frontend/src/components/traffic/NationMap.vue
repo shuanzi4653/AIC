@@ -683,7 +683,9 @@ const flightDots=computed(()=>{
     if(fade<=0.02) continue
     out.push({...f,x,y,lon,lat,headingScreen:screen,progressNow:Math.max(0,Math.min(1,p)),fade,
       selected:props.selectedId===f.id,
-      detour:f.status==='DELAYED',bad:f.riskLevel==='HIGH'})
+      // 琥珀 = 有绕飞方案（裁决 DETOUR），红 = 停飞（HOLD）。以前判 riskLevel，
+      // 会把"绕飞放行"也涂成红的，图上等于同时说"在绕"和"禁飞"。
+      detour:f.decision==='DETOUR',bad:f.decision==='HOLD'})
   }
   return out
 })
@@ -771,7 +773,9 @@ function hoverLine(line,event){
   hoverLineId.value=line.id
   const rows=[{text:line.kindLabel||'航线'}]
   rows.push({text:`${line.lengthKm} km`})
-  rows.push({text:line.blocked?'停飞':(line.detour?'绕飞放行':'直飞')},
+  // blocked 是**边界封锁**（航线越界被剔），不是天气停飞；以前这里写"停飞"，
+  // 和"绕飞/直飞"并列，读者会以为这条线被判禁飞。
+  rows.push({text:line.blocked?'越界封锁（不纳入）':(line.detour?'有绕飞方案':'直飞')},
     )
   showTip(event,`${shortName(line.fromName)} → ${shortName(line.toName)}`,rows)
 }

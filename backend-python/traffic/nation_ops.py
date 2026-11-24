@@ -94,7 +94,10 @@ def _risk(row: Dict[str, Any], weather: Dict[str, Dict[str, Any]],
         risk = min(0.95, risk + 0.12)
         drivers.append(f'端点风速 {wind:.1f} m/s')
     if detour:
-        risk = min(0.95, risk + 0.18)
+        # 绕飞是**处置**，不是风险源：避开回波之后，风险不该高于直飞那条。
+        # 原来这里 +0.18 —— 能见度 1.4 km 的基础分是 0.72（仅提示），一有绕飞就 0.90 → HIGH，
+        # 于是"能绕的判停、绕不开的反而放行"，方向是反的。实测 NC-0211/0038 就是这样红的。
+        # 绕飞的代价走 detourKm 与延误（late / delayMin），不进风险分。
         drivers.append(f"航路穿回波，绕飞 {detour.get('shiftKm', 0)} km")
     risk = round(min(0.95, max(0.0, risk)), 3)
 

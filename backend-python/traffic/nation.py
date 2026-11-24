@@ -593,21 +593,32 @@ def _virtual_detour_table(bucket: int) -> Dict[str, Dict[str, Any]]:
             got = _detour_for(path, avoid_xy)
             if got:
                 table[row['id']] = got
-            elif _path_hits(path, avoid_xy):   # 必须用投影后的 avoid：_path_hits 比的是米制平面
+            elif _hit_km(path, avoid_xy) >= MIN_HIT_KM:   # 与真实模式同一门槛：擦边不算压线
                 # 压线但小绕脱不开：这条航路此刻不成立，交给上层的"停飞"处理
                 blocked.add(row['id'])
+    if len(_VIRTUAL_CACHE) > 96:      # 144 档全留着没有意义，按帧龄淘汰最旧的
+        for key in list(_VIRTUAL_CACHE)[:48]:
+            _VIRTUAL_CACHE.pop(key, None)
     _VIRTUAL_CACHE[('table', bucket)] = (table, blocked)
     return table, blocked
 
 
-def _path_hits(path: List[List[float]], avoid) -> bool:
-    """航路是否落在回波多边形里（米制平面判交，与 _detour_for 同一套投影）。"""
+# 压线判定的最小贯穿长度：航路与回波多边形的相交段短于这个值，视为"擦边"，既不绕飞也不封锁。
+# 起因（2026-11-24 实测）：NC-0212 只侧移 0.8 km 就被判"绕飞成功"；而真正压线绕不开的走廊，
+# 在真实模式里又因为 blocked_ids 恒空被当成直飞放行。两头都错，所以给一个统一的门槛。
+MIN_HIT_KM = 3.0
+
+
+def _hit_km(path: List[List[float]], avoid) -> float:
+    """航路落在回波多边形里的长度（公里）。米制平面，与 _detour_for 同一套投影。"""
     from shapely.geometry import LineString
     if avoid is None or len(path) < 2:
-        return False
+        return 0.0
     to_xy = _xy_transformer()
     line = LineString([to_xy.transform(lon, lat) for lon, lat in path])
-    return bool(line.intersects(avoid))
+    if not line.intersects(avoid):
+        return 0.0
+    return float(line.intersection(avoid).length) / 1000.0
 
 
 def _virtual_bucket(minute: int) -> int:
@@ -686,6 +697,9 @@ def _detour_for(path: List[List[float]], avoid) -> Optional[Dict[str, Any]]:
     if not line.intersects(avoid):
         return None
     hit = line.intersection(avoid)
+    # 贯穿不到 MIN_HIT_KM 的算擦边：不改航路，也不算"绕飞成功"
+    if hit.length / 1000.0 < MIN_HIT_KM:
+        return None
     hit_m = max(3000.0, min(90000.0, hit.length))
     best = None
     for depth_m in (hit_m * 0.45 + 6000.0, hit_m * 0.75 + 8000.0, hit_m * 1.1 + 12000.0):
@@ -713,22 +727,31 @@ def _detour_for(path: List[List[float]], avoid) -> Optional[Dict[str, Any]]:
 
 
 @lru_cache(maxsize=2)
-def _detour_table(radar_ts: str) -> Dict[str, Dict[str, Any]]:
-    """按雷达帧缓存绕飞结果：一帧 10 分钟，不用每个请求重算 514 条。"""
+def _detour_table(radar_ts: str):
+    """按雷达帧缓存绕飞结果：一帧 10 分钟，不用每个请求重算 514 条。
+
+    返回 ``(table, blocked)``。``blocked`` 是"压在回波里、小绕又脱不开"的走廊 ——
+    以前只在虚拟气象里算它，于是真实天气下这类走廊一律被当成直飞放行
+    （risk 只 0.72，够不到 0.75 的停飞线），而界面上那句"停飞（无可用绕飞方案）"
+    在正式模式里永远不出现。这里两条路径用同一套判据。
+    """
     from shapely.ops import transform as shp_transform
     radar = _radar()
     avoid = _radar_polygons(_radar_clipped(radar.get('ts') or 'none'))
     if avoid is None:
-        return {}
+        return {}, set()
     # 回波多边形是经纬度，航路要投影到米制平面才能判交、才能算法线侧移
     avoid = shp_transform(_xy_transformer().transform, avoid)
     table: Dict[str, Dict[str, Any]] = {}
+    blocked: set = set()
     for row in _corridor_rows():
         path = row.get('path') or [row['fromLonLat'], row['toLonLat']]
         got = _detour_for(path, avoid)
         if got:
             table[row['id']] = got
-    return table
+        elif _hit_km(path, avoid) >= MIN_HIT_KM:
+            blocked.add(row['id'])
+    return table, blocked
 
 
 @lru_cache(maxsize=1)
@@ -1018,7 +1041,7 @@ def _flights_payload_locked(level: str = 'nation', ident: Optional[str] = None,
         table, blocked_ids = _virtual_detour_table(_virtual_bucket(minute))
     else:
         radar = _radar()
-        table = _detour_table(radar.get('ts') or 'none') if radar.get('available') else {}
+        table, blocked_ids = _detour_table(radar.get('ts') or 'none') if radar.get('available') else ({}, set())
     if level == 'region':
         scoped = {row['name'] for row in _province_rows() if row['region'] == (ident or 'north')}
         corridors = _slice_corridors(scoped)
@@ -1078,7 +1101,7 @@ def _payload_locked(level: str = 'nation', ident: Optional[str] = None,
         table, blocked_ids = _virtual_detour_table(_virtual_bucket(minute))
     else:
         radar = _radar()
-        table = _detour_table(radar.get('ts') or 'none') if radar.get('available') else {}
+        table, blocked_ids = _detour_table(radar.get('ts') or 'none') if radar.get('available') else ({}, set())
 
     def attach(body: Dict[str, Any], corridors: List[Dict[str, Any]],
                cities: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -1462,8 +1485,7 @@ def _evidence_locked(flight_id: str, minute: int = 60, virtual: bool = False) ->
         table, blocked_ids = _virtual_detour_table(_virtual_bucket(minute))
     else:
         radar = _radar()
-        table = _detour_table(radar.get('ts') or 'none') if radar.get('available') else {}
-        blocked_ids = set()
+        table, blocked_ids = _detour_table(radar.get('ts') or 'none') if radar.get('available') else ({}, set())
     weather_body = _city_weather_payload()
     weather = weather_body.get('cities') or {}
     weather_ts = weather_body.get('fetchedAt')
