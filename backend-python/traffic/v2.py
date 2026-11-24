@@ -1081,6 +1081,26 @@ def _system_version() -> str:
         except OSError:
             return ''
 
+def _national_model_doc() -> Dict[str, Any]:
+    """全国模型（ml-v3-national-vis）的元数据摘要，取不到就明说，不编。"""
+    path = ROOT / 'models' / 'ml-v3-national-vis.json'
+    try:
+        doc = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as exc:  # noqa: BLE001
+        return {'available': False, 'note': f'读不到 models/ml-v3-national-vis.json（{type(exc).__name__}）'}
+    test = ((doc.get('metrics') or {}).get('test') or {})
+    return {
+        'available': True,
+        'modelVersion': doc.get('modelVersion'),
+        'kind': doc.get('kind'),
+        'target': doc.get('target'),
+        'trainedAt': doc.get('trainedAt'),
+        'features': len(doc.get('features') or []),
+        'test': {k: test.get(k) for k in ('auc', 'brier', 'ts', 'samples', 'baseRate') if test.get(k) is not None},
+        'note': '全国四级（全国→大区→省→市）的判据概率由这个模型给出。',
+    }
+
+
 def modelcard() -> Dict[str, Any]:
     payload = nowcast.metrics()
     if not payload:
@@ -1092,9 +1112,20 @@ def modelcard() -> Dict[str, Any]:
     runtime_gust = nowcast.GUST_LIMIT_MS
     same = (isinstance(training_gust, (int, float))
             and abs(float(training_gust) - float(runtime_gust)) < 1e-9)
+    national = _national_model_doc()
     return {
         'status': 'OK',
         'systemVersion': _system_version(),
+        # 作用域必须写在最前面：这张卡是**轨1 站点模型**（3 站 ZYTX/ZYCC/ZYHB，26 维），
+        # 而全国四级判据用的是 ml-v3-national（319 城，28 维）。两者不是同一个模型，
+        # 以前只有 `modelVersion: ml-v2` 一行，读者很容易拿这张卡去对"319 城"的说法（V1.1.5 审计 P2-2）。
+        'scope': {
+            'kind': 'STATION',
+            'label': '轨1 站点模型（沈阳/长春/哈尔滨三站）',
+            'features': 26,
+            'note': '本站点卡不参与全国四级判据；全国层判据见 national 段。',
+        },
+        'national': national,
         'gustThreshold': {
             'training': training_gust,
             'runtime': runtime_gust,
@@ -1114,10 +1145,18 @@ def modelcard() -> Dict[str, Any]:
         'targets': payload.get('targets'),
         'baselineNote': payload.get('baselineNote'),
         'loaded': status,
+        # V1.1.5：每项补 modelVersion 与特征数。以前三项只有 key/title，
+        # 前端或评审脚本读 `tasks[].modelVersion` 会拿到 null（审计里就是这样发现的）。
         'tasks': [
-            {'key': 'vis3k', 'title': '低能见度 <3000 m（注意级）'},
-            {'key': 'vis', 'title': '低能见度 <1000 m（不可飞）'},
-            {'key': 'gust', 'title': '强阵风 >10 m/s'},
+            {'key': key, 'title': title,
+             'modelVersion': status.get(key),
+             'features': len(payload.get('features') or []) or None,
+             'trainedAt': payload.get('createdAt')}
+            for key, title in (
+                ('vis3k', '低能见度 <3000 m（注意级）'),
+                ('vis', '低能见度 <1000 m（不可飞）'),
+                ('gust', '强阵风 >10 m/s'),
+            )
         ],
     }
 

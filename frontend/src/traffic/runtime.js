@@ -3208,7 +3208,17 @@ export function radarRelaySlots(nowMs, offsetMinutes = 480, cadenceMinutes = 6, 
 }
 
 /** 服务端下发的取图说明是否完整可用；不完整就不要发起中继（会白跑一轮网络）。 */
+// 浏览器"代取瓦片"从 V1.1.5 起关闭（审计 P1-3）。
+//
+// 实测：源站 `image.data.cma.cn` 不返回 Access-Control-Allow-Origin，浏览器
+// `fetch(..., {mode:'cors'})` **必然**被拦，一次加载就刷 8 条 CORS 红字，而后端
+// `POST /traffic/radar/tiles` 永远收不到数据 —— 也就是说这条降级路径从来没生效过。
+// 保留函数与调用点（收红标、走 idle），但一律返回 false；真要恢复，必须是
+// **同源代理**（后端取图、前端只请求自家域名），而不是让浏览器去取第三方瓦片。
+export const RADAR_RELAY_VIA_BROWSER = false
+
 export function radarRelayReady(relay) {
+  if (!RADAR_RELAY_VIA_BROWSER) return false
   return !!(relay && relay.needed === true && relay.tileBase && Array.isArray(relay.grid)
     && relay.grid.length > 0 && Number.isFinite(relay.zoom))
 }

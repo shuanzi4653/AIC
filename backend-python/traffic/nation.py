@@ -28,6 +28,7 @@ import json
 import math
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -1424,7 +1425,13 @@ def _city_totals(city: Dict[str, Any], corridors: List[Dict[str, Any]],
     市层不存在"跨市重复计"：`corridors` 已是本市切片，`flights` 只来自这批走廊，
     所以这里直接数原始列表，不再绕经省级块。
     """
-    origin = [f for f in flights if f.get('fromName') == city.get('name')]
+    name = city.get('name')
+    origin = [f for f in flights if f.get('fromName') == name]
+    inbound = [f for f in flights if f.get('toName') == name and f.get('fromName') != name]
+    # 城市页的"航线数"含进出港（`_slice_corridors(city=...)` 两个方向都收），
+    # 所以在飞也必须含飞入 —— 否则沈阳会出现"12 条航线、0 架在飞"（V1.1.5，审计 P1-2）。
+    # 叠出的 `airborneDeparting` 保留始发口径，方便与省层（按始发汇总）对账。
+    touch = origin + inbound
     return {
         'provinces': 1,
         'cities': 1,
@@ -1432,12 +1439,13 @@ def _city_totals(city: Dict[str, Any], corridors: List[Dict[str, Any]],
         'corridors': len(corridors),
         'blocked': sum(1 for row in corridors if row.get('borderBlocked')),
         'detour': sum(1 for row in corridors if row.get('detour')),
-        # 在飞/停飞按**起飞机归属**计，与 city_blocks 同一口径；本市为终点的班次
-        # 已从对面城市的块里算过，这里不重复。
-        'airborne': len(origin),
-        'delayed': sum(1 for f in origin if f.get('status') == 'DELAYED'),
-        'hold': sum(1 for f in origin if f.get('decision') == 'HOLD'),
+        'airborne': len(touch),
+        'airborneDeparting': len(origin),
+        'inbound': len(inbound),
+        'delayed': sum(1 for f in touch if f.get('status') == 'DELAYED'),
+        'hold': sum(1 for f in touch if f.get('decision') == 'HOLD'),
         'lowVisCities': int((summary or {}).get('lowVisCities') or 0),
+        'scopeNote': '在飞，含飞入本市（与本市航线数同口径）；airborneDeparting 为始发口径',
     }
 
 
@@ -1935,17 +1943,89 @@ def _pulse_locked() -> Dict[str, Any]:
 # 所以对外入口串行化 —— 命中 lru_cache 时这一步只是拿一次锁，代价可以忽略。
 _NATION_LOCK = threading.RLock()
 
+# ---- 载荷快照（V1.1.5，审计 P1-1）-------------------------------------------
+# 以前每个请求都要在 `_NATION_LOCK` 里重算一遍整份载荷（雷达取帧、逐市天气、
+# 模型概率、492 条几何、四级汇总）。2 核机器上 6 个并发就退化到中位 5 秒、峰值 23 秒。
+# 现在按 (level, id, minute, virtual) 缓存 20 秒，并且**同一个 key 只允许一个线程算**
+# （single-flight）：第二个请求等第一个算完直接拿结果，不再排队重算。
+#
+# 为什么不同 minute 之间仍是串行：`_payload_locked` 会写回共享的走廊几何与模块级缓存，
+# 去掉全局锁需要先把这些状态全部改成不可变快照，风险大于收益（留给 V1.2.0）。
+# 现场的真实形态是"多人看同一帧"，这一层足够。
+_PAYLOAD_TTL = 20.0
+_CACHE_CAP = 24
+_PAYLOAD_CACHE: Dict[tuple, tuple] = {}
+_FLIGHT_CACHE: Dict[tuple, tuple] = {}
+_INFLIGHT: Dict[tuple, threading.Lock] = {}
+
+
+def _cache_get(store: Dict[tuple, tuple], key: tuple, ttl: float):
+    entry = store.get(key)
+    if entry is not None and (time.time() - entry[0]) <= ttl:
+        return entry[1]
+    return None
+
+
+def _cache_put(store: Dict[tuple, tuple], key: tuple, body: Any) -> None:
+    store[key] = (time.time(), body)
+    if len(store) > _CACHE_CAP:
+        for old in list(store)[: len(store) - _CACHE_CAP]:
+            store.pop(old, None)
+    if len(_INFLIGHT) > _CACHE_CAP * 2:
+        for old in [k for k in _INFLIGHT if k not in store][: _CACHE_CAP]:
+            _INFLIGHT.pop(old, None)
+
+
+def _single_flight(store: Dict[tuple, tuple], key: tuple, build):
+    """查缓存 → 未命中则同一 key 只算一次。build() 内部自己拿 _NATION_LOCK。"""
+    hit = _cache_get(store, key, _PAYLOAD_TTL)
+    if hit is not None:
+        return hit
+    lock = _INFLIGHT.setdefault(key, threading.Lock())
+    with lock:
+        hit = _cache_get(store, key, _PAYLOAD_TTL)      # 双检：等锁期间别人可能已经算完
+        if hit is not None:
+            return hit
+        body = build()
+        _cache_put(store, key, body)
+        return body
+
+
+def _norm_minute(minute: Any) -> int:
+    """一天 1440 分钟：**1440 与 0 必须是同一帧**（V1.1.5）。
+
+    以前直接透传 1440，而 `elapsed = (minute - phase) % headway` 里 headway 是 150–270，
+    1440 不是它的倍数，于是"拖到最右"与"拖回最左"给出两套数字（实测 124 架 vs 102 架）。
+    """
+    try:
+        value = int(minute)
+    except (TypeError, ValueError):
+        value = 0
+    return value % 1440
+
 
 def payload(level: str = 'nation', ident: Optional[str] = None, minute: int = 60,
             virtual: bool = False):
-    with _NATION_LOCK:
-        return _payload_locked(level, ident, minute, virtual)
+    minute = _norm_minute(minute)
+    key = ('payload', level, ident or '', minute, bool(virtual))
+
+    def build():
+        with _NATION_LOCK:
+            return _payload_locked(level, ident, minute, virtual)
+
+    return _single_flight(_PAYLOAD_CACHE, key, build)
 
 
 def flights_payload(level: str = 'nation', ident: Optional[str] = None, minute: int = 60,
                     virtual: bool = False):
-    with _NATION_LOCK:
-        return _flights_payload_locked(level, ident, minute, virtual)
+    minute = _norm_minute(minute)
+    key = ('flights', level, ident or '', minute, bool(virtual))
+
+    def build():
+        with _NATION_LOCK:
+            return _flights_payload_locked(level, ident, minute, virtual)
+
+    return _single_flight(_FLIGHT_CACHE, key, build)
 
 
 def pulse() -> Dict[str, Any]:
@@ -2047,5 +2127,6 @@ def narrate(flight_id: str, minute: int = 60, virtual: bool = False,
 
 
 def evidence(flight_id: str, minute: int = 60, virtual: bool = False) -> Dict[str, Any]:
+    minute = _norm_minute(minute)
     with _NATION_LOCK:
         return _evidence_locked(flight_id, minute, virtual)

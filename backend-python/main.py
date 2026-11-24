@@ -495,20 +495,39 @@ def traffic_v2_overview(seed: int = Query(42),
                                minute=minute, clearance=clearance)
 
 @app.get('/traffic/v2/nation/flights')
-def traffic_v2_nation_flights(level: str = Query('nation', pattern='^(nation|region|province|city)$'),
+def traffic_v2_nation_flights(request: Request,
+                              level: str = Query('nation', pattern='^(nation|region|province|city)$'),
                               id: str = Query(''),
                               minute: int = Query(0, ge=0, le=1440),
                               virtual: int = Query(0, ge=0, le=1)):
     """时间轴专用：只回本级的在飞航班与统计，不重算网络。
 
     virtual=1 走"虚拟气象演示包"：合成回波几何，绕飞/停飞按同一套判定重算。
+    V1.1.5：加 ETag —— 时间轴每拖一格都是一次整包拉取，同帧重复请求应当只有 304。
     """
     from traffic import nation as traffic_nation
-    return traffic_nation.flights_payload(level, id or None, minute, bool(virtual))
+    body = traffic_nation.flights_payload(level, id or None, minute, bool(virtual))
+    return _conditional_json(body, request, ttl=10)
+
+
+def _conditional_json(payload: dict, request: Request, ttl: int = 20) -> Response:
+    """带 ETag 的 JSON 响应（V1.1.5，审计 P2-3）。
+
+    全国载荷一次 592–619 KB，而界面每拖一格时间轴就整份重拉。加了强 ETag 之后，
+    浏览器发 If-None-Match，命中就只回 304 —— 省掉的是那几百 KB，不是几毫秒。
+    payload 已由 nation 层缓存 20 秒，所以 20 秒内 ETag 稳定。
+    """
+    raw = _json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    etag = '"' + hashlib.md5(raw).hexdigest() + '"'
+    headers = {'ETag': etag, 'Cache-Control': f'private, max-age={ttl}'}
+    if request.headers.get('if-none-match') == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=raw, media_type='application/json', headers=headers)
 
 
 @app.get('/traffic/v2/nation')
-def traffic_v2_nation(level: str = Query('nation', pattern='^(nation|region|province|city)$'),
+def traffic_v2_nation(request: Request,
+                      level: str = Query('nation', pattern='^(nation|region|province|city)$'),
                       id: str = Query(''), minute: int = Query(0, ge=0, le=1440),
                       virtual: int = Query(0, ge=0, le=1)):
     """全国航线网四级：全国 → 大区 → 省 → 市。每级单独请求，前端逐级加载。
@@ -520,12 +539,17 @@ def traffic_v2_nation(level: str = Query('nation', pattern='^(nation|region|prov
     payload = traffic_nation.payload(level, id or None, minute, bool(virtual))
     if payload.get('status') == 'NOT_FOUND':
         raise HTTPException(404, payload.get('note') or '未找到')
-    return payload
+    return _conditional_json(payload, request)
 
 
 @app.get('/traffic/v2/nation/zones')
-def traffic_v2_nation_zones(policy: str = Query('APPROVAL_REQUIRED')):
-    """机场净空几何与穿越明细（DERIVED）。主载荷只放计数，几何在这里按需取。"""
+def traffic_v2_nation_zones(policy: str = Query('APPROVAL_REQUIRED',
+                                                pattern='^(PROHIBITED|APPROVAL_REQUIRED)$')):
+    """机场净空几何与穿越明细（DERIVED）。主载荷只放计数，几何在这里按需取。
+
+    V1.1.5：`policy` 加白名单。以前任何拼错的值都会被静默当成 APPROVAL_REQUIRED 返回 200，
+    演示时"切到一律禁止"如果参数写错，屏幕上会照样显示可申请，只有一行小字不同。
+    """
     from traffic import nation_zones
     body = nation_zones.payload(policy)
     body['crossings'] = nation_zones.crossings('v1', policy)

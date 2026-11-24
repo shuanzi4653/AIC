@@ -873,7 +873,12 @@ onUnmounted(()=>{
          上面是数字（等宽、定宽），下面是名称，变动时给 ▲/▼。 -->
     <div class="nrn-metrics" data-nation-headline>
       <div class="m"><b>{{ num(total.corridors) }}</b><span>航线</span></div>
-      <div class="m"><b>{{ num(total.airborne) }}</b><span>在飞</span></div>
+      <!-- 市层的在飞**含飞入**（与自己那 12 条进出港航线同口径）；省层与全国层按始发汇总。
+           以前市层只数始发，于是沈阳出现「12 条航线、0 架在飞」（V1.1.5 审计 P1-2）。 -->
+      <div class="m" :title="total.airborneDeparting!=null
+             ? `含飞入本市；仅始发 ${total.airborneDeparting} 架，与上层按始发对账`
+             : '本级在飞架次'">
+        <b>{{ num(total.airborne) }}</b><span>在飞</span></div>
       <!-- 「绕飞」这一格绑的是 total.delayed，即**按班次计数**；而口径表里另有一个
            「绕飞航线」（total.detour，按条计数）。两者名字一样、量纲不同，曾经同屏
            出现 0 / 1 / 3 三个数被当成 bug（2026-11-12 复测）。标签写清量纲，

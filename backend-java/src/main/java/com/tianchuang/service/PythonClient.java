@@ -157,6 +157,15 @@ public class PythonClient {
             return org.springframework.http.ResponseEntity.status(response.statusCode()).body(
                     Map.of("code", "DECISION_REQUEST_FAILED", "message", message, "retryable", false));
         }
+        // 304：Python 侧已经按 If-None-Match 判过，这里必须原样转出去。
+        // 以前没有这一支，304 会掉进下面的 readValue("")，抛 JsonMappingException 变成 500
+        // —— "浏览器缓存命中"反而变成"接口挂了"（V1.1.5）。
+        if (response.statusCode() == 304) {
+            var notModified = org.springframework.http.ResponseEntity.status(304);
+            response.headers().firstValue("etag").ifPresent(value -> notModified.header("ETag", value));
+            response.headers().firstValue("cache-control").ifPresent(value -> notModified.header("Cache-Control", value));
+            return notModified.build();
+        }
         var ok = org.springframework.http.ResponseEntity.ok();
         var etag = response.headers().firstValue("etag");
         var cacheControl = response.headers().firstValue("cache-control");

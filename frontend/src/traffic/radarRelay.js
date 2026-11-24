@@ -109,7 +109,14 @@ async function fetchSlotTiles(relay, slot, fetchImpl, deadCoords = new Set(), st
 }
 
 export async function relayRadarTiles(relay, { fetchImpl = fetch, nowMs = Date.now() } = {}) {
-  if (!radarRelayReady(relay)) return { ok: false, reason: 'NO_INSTRUCTIONS' }
+  // 这里只做**结构性**检查（有没有可用指令），不做功能开关：
+  // 是否发起中继由调用点（TrafficWorkbench.maybeRelayRadar）用 radarRelayReady 决定。
+  // V1.1.5 之前两处都调 radarRelayReady，于是"关闭浏览器中继"会把这一层的
+  // 单元测试（探测/回退/缺片语义）一起判死 —— 那测的是搬运逻辑，与开关无关。
+  if (!relay || relay.needed !== true || !relay.tileBase || !Array.isArray(relay.grid)
+    || !relay.grid.length || !Number.isFinite(relay.zoom)) {
+    return { ok: false, reason: 'NO_INSTRUCTIONS' }
+  }
   if (relay && relay.corsBlocked) return { ok: false, reason: 'CORS_BLOCKED' }
   const steps = Number.isFinite(relay.maxLookbackSteps) ? relay.maxLookbackSteps : 12
   const candidates = radarRelaySlots(nowMs, relay.slotTimezoneOffsetMinutes ?? 480,

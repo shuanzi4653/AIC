@@ -112,7 +112,9 @@ test('时次字面值不随机器时区改变 —— 本机在 UTC+8，测试不
 })
 
 test('取图说明不完整时不要发起中继（会白跑一轮网络）', () => {
-  assert.equal(radarRelayReady(instructions()), true)
+  // V1.1.5：浏览器代取已关闭（源站无 CORS 头，fetch 必然被拦，实测一次加载刷 8 条红字）。
+  // 所以**指令完整也不发起** —— 这一行是开关状态，不是判断逻辑。开关打开时改回 true。
+  assert.equal(radarRelayReady(instructions()), false)
   assert.equal(radarRelayReady(undefined), false)
   assert.equal(radarRelayReady(null), false)
   assert.equal(radarRelayReady({}), false)
