@@ -748,7 +748,7 @@ onUnmounted(()=>{
     演示模式（<code>?demo=1</code>）：底图与雷达瓦片不再外取，气象以本帧快照为准；页面上的“实时”字样本次不成立。
   </p>
   <header class="wb-top" data-workbench-top>
-    <span class="wb-brand"><b>天窗智巡</b><em>低空航路气象风险裁决</em></span>
+    <span class="wb-brand"><b>天窗智巡</b><em>低空航路气象风险研判与裁决</em></span>
     <!-- 作用域（V1.0.6）：全国 → 大区 → 省 → 市 的唯一显示点。
          没下钻时是静态标签；下钻之后变成一个按钮，点一下回全国 —— 否则从带 scope 的
          链接进来，用户只能靠浏览器后退才知道"现在看的是河北省"。 -->
