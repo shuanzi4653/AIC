@@ -748,7 +748,7 @@ onUnmounted(()=>{
     演示模式（<code>?demo=1</code>）：底图与雷达瓦片不再外取，气象以本帧快照为准；页面上的“实时”字样本次不成立。
   </p>
   <header class="wb-top" data-workbench-top>
-    <span class="wb-brand"><b>天窗智巡</b><em>低空航路气象风险研判与裁决</em></span>
+    <span class="wb-brand" :title="'天窗智巡 · 低空交通协同运行管理系统｜低空航路气象风险研判与裁决'"><b>天窗智巡 · 低空交通协同运行管理系统</b><em>低空航路气象风险研判与裁决</em></span>
     <!-- 作用域（V1.0.6）：全国 → 大区 → 省 → 市 的唯一显示点。
          没下钻时是静态标签；下钻之后变成一个按钮，点一下回全国 —— 否则从带 scope 的
          链接进来，用户只能靠浏览器后退才知道"现在看的是河北省"。 -->
@@ -1223,8 +1223,8 @@ html[data-theme="light"] .traffic-beian .tb-sep{background:rgba(0,0,0,.16)}
 .wb-top{flex:0 0 auto;display:flex;align-items:center;gap:14px;padding:8px 16px;min-height:46px;
   border-bottom:1px solid #1e3648;background:linear-gradient(180deg,#0f2233 0%,#0b1a27 100%)}
 .wb-brand{display:flex;align-items:baseline;gap:9px;min-width:0}
-.wb-brand b{font-size:16px;letter-spacing:1.2px;color:#e2f3fd;font-weight:600;white-space:nowrap}
-.wb-brand em{font-style:normal;font-size:11.5px;color:#6f92a8;letter-spacing:.4px;white-space:nowrap}
+.wb-brand b{font-size:15px;letter-spacing:.3px;color:#e2f3fd;font-weight:600;white-space:nowrap}
+.wb-brand em{font-style:normal;font-size:11.5px;color:#6f92a8;letter-spacing:.4px;white-space:nowrap;border-left:1px solid rgba(110,150,180,.35);padding-left:10px}
 .wb-scope{font-size:12px;color:#9fc4dd;border:1px solid #26445a;border-radius:4px;padding:2px 8px;white-space:nowrap}
 /* 下钻之后同一枚胶囊变成按钮：只多一个"· 回全国"，不做第二套样式 ——
    用户不需要重新认一个控件，只需要知道"能点回去"。 */
@@ -1263,7 +1263,8 @@ html[data-theme="light"] .traffic-beian .tb-sep{background:rgba(0,0,0,.16)}
 .traffic-workbench.home-mode{padding:0}
 .traffic-workbench.home-mode .wb-body{padding:10px 12px 12px}
 .traffic-workbench.page-mode{overflow:hidden}
-@media(max-width:1180px){.wb-brand em{display:none}}
+@media(max-width:1440px){.wb-brand em{display:none}}
+@media(max-width:1180px){.wb-brand b{font-size:13px;letter-spacing:0}}
 @media(max-width:1000px){
   .traffic-workbench .operations-nav{flex-basis:56px;width:56px;padding:10px 6px 8px}
   .traffic-workbench .operations-nav .nav-group{justify-content:center!important;font-size:0!important}
