@@ -127,6 +127,52 @@ public class PythonClient {
         return builder.body(resp.body());
     }
 
+    /**
+     * 原样透传上游 JSON（V1.1.5）。
+     *
+     * `decisionRequest` 会把 600 KB 的全国载荷 `readValue(..., Object.class)` 解析成一棵
+     * LinkedHashMap，再交给 Jackson 重新序列化一次 —— 两条都是纯 CPU。实测：Python 侧
+     * 命中缓存只要 44 ms，经这道转发变成 5 s/请求、6 并发 5.2 s（审计 P1-1 的真凶之一）。
+     * 这两条热路径（nation / nation/flights）只做转发，不读字段，所以直接搬字节。
+     */
+    public org.springframework.http.ResponseEntity<byte[]> decisionRaw(String path, Map<String, Object> body) throws Exception {
+        HttpRequest.Builder requestBuilder = builder(path).timeout(Duration.ofSeconds(75));
+        if (body == null) requestBuilder.GET();
+        else requestBuilder.POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)));
+        HttpResponse<byte[]> response = http.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofByteArray());
+
+        if (response.statusCode() == 304) {
+            var notModified = org.springframework.http.ResponseEntity.status(304);
+            response.headers().firstValue("etag").ifPresent(value -> notModified.header("ETag", value));
+            response.headers().firstValue("cache-control").ifPresent(value -> notModified.header("Cache-Control", value));
+            return notModified.build();
+        }
+        if (response.statusCode() >= 400) {
+            String message = "决策请求被拒绝，请检查输入、时次或记录是否存在";
+            try {
+                var errorBody = mapper.readTree(response.body());
+                var detail = errorBody.path("detail");
+                if (detail.isTextual() && detail.asText().length() <= 160) {
+                    message = detail.asText();
+                } else if (detail.isArray() && detail.size() > 0) {
+                    message = detail.get(0).path("msg").asText(message);
+                }
+            } catch (Exception ignored) {
+                // 上游不是 JSON（502 页面之类）就保留默认文案，别在错误路径上再抛一次
+            }
+            byte[] err = mapper.writeValueAsBytes(Map.of("code", "DECISION_REQUEST_FAILED",
+                    "message", message, "retryable", false));
+            return org.springframework.http.ResponseEntity.status(response.statusCode())
+                    .contentType(new org.springframework.http.MediaType("application", "json", java.nio.charset.StandardCharsets.UTF_8))
+                    .body(err);
+        }
+        var ok = org.springframework.http.ResponseEntity.ok();
+        response.headers().firstValue("etag").ifPresent(value -> ok.header("ETag", value));
+        response.headers().firstValue("cache-control").ifPresent(value -> ok.header("Cache-Control", value));
+        return ok.contentType(new org.springframework.http.MediaType("application", "json", java.nio.charset.StandardCharsets.UTF_8))
+                .body(response.body());
+    }
+
     public org.springframework.http.ResponseEntity<?> decisionRequest(String path, Map<String, Object> body) throws Exception {
         // V1.1.2：30 s 短于冷启动重建全国载荷的耗时（实测 30.2 s 断在一次 568 KB 的 GET 上，
         // 报 java.net.http.HttpTimeoutException，前端 90 s 超时被网关抢先）。抬到 75 s，

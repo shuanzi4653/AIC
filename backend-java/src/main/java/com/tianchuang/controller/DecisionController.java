@@ -98,14 +98,15 @@ public class DecisionController {
                                        @RequestParam Map<String, String> params) throws Exception {
         String query = params.entrySet().stream().map(e -> encode(e.getKey()) + "=" + encode(e.getValue()))
                 .collect(Collectors.joining("&"));
-        return python.decisionRequest("/traffic/v2/" + resource + (query.isEmpty() ? "" : "?" + query), null);
+        // 纯转发，不解析：nation 一次 600 KB，解析再序列化是 5 s/请求的主因（V1.1.5）。
+        return python.decisionRaw("/traffic/v2/" + resource + (query.isEmpty() ? "" : "?" + query), null);
     }
 
     @GetMapping("/traffic/v2/nation/flights")
     public ResponseEntity<?> nationFlights(@RequestParam Map<String, String> params) throws Exception {
         String query = params.entrySet().stream().map(e -> encode(e.getKey()) + "=" + encode(e.getValue()))
                 .collect(Collectors.joining("&"));
-        return python.decisionRequest("/traffic/v2/nation/flights" + (query.isEmpty() ? "" : "?" + query), null);
+        return python.decisionRaw("/traffic/v2/nation/flights" + (query.isEmpty() ? "" : "?" + query), null);
     }
 
     /**
