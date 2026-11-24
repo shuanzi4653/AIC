@@ -1,0 +1,11 @@
+[Unit]
+Description=AIC 天窗智巡：把关键接口预热一遍（只读，不重启服务）
+After=AIC-tianchuang.service AIC-tianchuang-python.service
+Wants=AIC-tianchuang.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/opt/apps/AIC-tianchuang/bin/warm-now.sh
+Nice=10
+TimeoutStartSec=600

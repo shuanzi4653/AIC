@@ -108,43 +108,65 @@ def _startup_warm():
 
     log = logging.getLogger(__name__)
 
-    def worker():
-        time.sleep(5)
-        for channel in ('measured', 'virtual'):
+    # ---- 顺序是"轻的先、重的后"，不是随便排的（V1.1.5）----
+    # 旧顺序：t+5s 起连建 two 个通道的场（各几十秒 CPU），t+11s 再算全国载荷。
+    # 结果部署后 1–3 分钟 CPU 一直是 100%，这时候任何人打开页面都在排队 ——
+    # 现场"刚发完版就看一眼"正好撞上这一段。
+    # 新顺序：全国层（首屏真正需要的）先算；旧轨建场延后到 90/150 秒，
+    # 再加 systemd CPUQuota 兜底，让它慢一点跑完，而不是把首屏挤出去。
+    def _warm_nation() -> None:
+        try:
+            from traffic import nation as traffic_nation
+            body = traffic_nation.payload('nation', None, 60)
+            log.info('startup warm: 全国层 %s 城 / %s 条 / 在飞 %s',
+                     body.get('summary', {}).get('cities'),
+                     body.get('summary', {}).get('corridors'),
+                     len(body.get('flights') or []))
+        except Exception:  # noqa: BLE001
+            log.exception('startup warm: 全国层预热失败（不影响服务启动）')
+
+    def _session_warm(delay: float, channel: str) -> None:
+        time.sleep(delay)
+        try:
+            with workspace.bind(''):
+                weather_control.set_mode(
+                    channel, actor='startup-warm', reason='服务启动预热')
+                traffic_service.session(42, 'live')
+            log.info('startup warm: %s 已建场（延迟 %.0f s，避开首屏）', channel, delay)
+        except Exception:  # noqa: BLE001
+            log.exception('startup warm failed: %s', channel)
+
+    def _keep_warm() -> None:
+        """常驻保活：每 15 秒把默认帧重算一次（命中缓存即 40 ms）。
+
+        为什么要有它：nation 载荷缓存 TTL 20 秒，而"人什么时候打开页面"是不确定的。
+        没有保活时，第一个访客永远撞在冷缓存上（首屏 1–3 秒）；有保活时，任意时刻
+        打开都是命中态。代价是 40 ms / 15 s ≈ 0.3% 的一核。
+        """
+        from traffic import nation as traffic_nation
+        while True:
             try:
                 with workspace.bind(''):
-                    weather_control.set_mode(
-                        channel, actor='startup-warm', reason='服务启动预热')
-                    traffic_service.session(42, 'live')
-                log.info('startup warm: %s 已建场', channel)
+                    traffic_nation.payload('nation', None, 60)
             except Exception:  # noqa: BLE001
-                log.exception('startup warm failed: %s', channel)
+                pass
+            time.sleep(15)
+
+    def orchestrator():
+        time.sleep(3)
+        threading.Thread(target=_warm_nation, name='warm-nation', daemon=True).start()
+        threading.Thread(target=_session_warm, args=(90, 'measured'), name='warm-session-a', daemon=True).start()
+        threading.Thread(target=_session_warm, args=(150, 'virtual'), name='warm-session-b', daemon=True).start()
+        time.sleep(170)
         try:
             with workspace.bind(''):
                 weather_control.set_mode(
                     'measured', actor='startup-warm', reason='预热结束，复原为实测')
         except Exception:  # noqa: BLE001
             log.exception('startup warm: 复原通道失败')
-        # 全国层预热：雷达帧、绕飞表、逐市实况、模型概率都要联网，冷缓存约 50 秒。
-        # 这段**不能**放在启动流程里同步跑 —— 页面一打开就会发请求，两边同时进 shapely
-        # 的 make_valid / buffer，进程直接段错误（实测 exit 139）。改成延时后台线程，
-        # 与真实请求之间由 nation 模块的串行锁隔开。
-        def _warm_nation() -> None:
-            time.sleep(6)
-            try:
-                from traffic import nation as traffic_nation
-                body = traffic_nation.payload('nation', None, 60)
-                log.info('startup warm: 全国层 %s 城 / %s 条 / 在飞 %s',
-                         body.get('summary', {}).get('cities'),
-                         body.get('summary', {}).get('corridors'),
-                         len(body.get('flights') or []))
-            except Exception:  # noqa: BLE001
-                log.exception('startup warm: 全国层预热失败（不影响服务启动）')
+        threading.Thread(target=_keep_warm, name='keep-warm', daemon=True).start()
 
-        import threading as _threading
-        _threading.Thread(target=_warm_nation, name='warm-nation', daemon=True).start()
-
-    threading.Thread(target=worker, name='startup-warm', daemon=True).start()
+    threading.Thread(target=orchestrator, name='startup-warm', daemon=True).start()
 
 @app.on_event('startup')
 def _on_startup():

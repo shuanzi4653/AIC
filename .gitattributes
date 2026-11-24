@@ -7,3 +7,5 @@
 
 # Windows 批处理必须是 CRLF：LF 的 .bat 在某些环境下会被 cmd 逐行误解析。
 *.bat       text eol=crlf
+bin/*.service text eol=lf
+bin/*.timer   text eol=lf

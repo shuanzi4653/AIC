@@ -77,3 +77,24 @@ test('P2-1 frontend/src 下不得再出现 Java 源码', () => {
   if (existsSync(root)) walk(root)
   assert.deepEqual(offenders, [], `frontend/src 下有 Java 源码：${offenders.slice(0, 3).join(', ')}`)
 })
+
+test('运维：keep-warm 常驻 + 启动预热重排', () => {
+  assert.ok(MAIN.includes('def _keep_warm('), '缺少常驻保活')
+  assert.ok(MAIN.includes('keep-warm'), '保活线程要起名，日志里才认得出')
+  assert.ok(MAIN.includes("args=(90, 'measured')"), '旧轨建场要延后到 90 秒，别挤首屏')
+  assert.ok(MAIN.includes("args=(150, 'virtual')"), '第二通道延后到 150 秒')
+})
+
+test('运维：定时预热脚本存在且是 LF 换行', () => {
+  const script = read('../../bin/warm-now.sh')
+  assert.ok(script.startsWith('#!/usr/bin/env bash'), 'shebang 必须是 bash')
+  assert.ok(!script.includes('\r'), 'CRLF 会让 shebang 变成 bash\\r，systemd 直接 127')
+  assert.ok(script.includes('fail=1'), '端点失败要能让退出码非 0')
+})
+
+test('运维：安全响应头加在应用里', () => {
+  const filter = read('../../backend-java/src/main/java/com/tianchuang/config/ResponseHeadersFilter.java')
+  assert.ok(filter.includes('Referrer-Policy'), '缺少 Referrer-Policy')
+  assert.ok(filter.includes('Permissions-Policy'), '缺少 Permissions-Policy')
+  assert.ok(!filter.includes('Strict-Transport-Security'), 'HSTS 由 nginx 发，应用里重复会出两个同名头')
+})

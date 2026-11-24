@@ -16,6 +16,10 @@
 - **模型卡写清作用域**：新增 `scope`（轨1 站点模型，3 站 26 维）与 `national` 段（ml-v3，319 城 28 维，含 test AUC/Brier/TS）；`tasks[]` 补齐 `modelVersion`（以前三项全是 null）。
 - **净空参数收紧**：`policy` 只接受 `PROHIBITED|APPROVAL_REQUIRED`，拼错不再静默回退默认档。
 - **仓库清理**：删除 `frontend/src/main`（84 个）与 `frontend/src/test`（14 个）误入的 Java 副本（与 backend-java 同名文件 70/76 不一致），新增护栏 `frontend/tests/audit115.test.mjs` 防止回潮。
+- **预热不再靠人跑**：进程内 `keep-warm` 每 15 秒把默认帧重算一次（命中缓存 40 ms），任意时刻打开页面都是命中态；启动预热改为"轻的先、重的后"（全国层 t+3s，旧轨建场 t+90s / t+150s），部署后前 1–3 分钟不再打满 CPU。
+- **资源上限**：systemd drop-in 给 Java `CPUQuota=130%`、Python `CPUQuota=110%`（2 核共享机，留余量给 nginx 与同机其他站点）。
+- **定时预热**：`aic-warm.timer` 每天 08:05 / 12:05 跑 `bin/warm-now.sh`（只读打 7 个关键端点并打印耗时），手动 `systemctl start aic-warm.service` 同效。
+- **运维小项**：`/favicon.ico` 返回 204（原先 24 小时 53 次 404）、`/beian.png` 301 到 `/assets/beian.png`、响应头补 `Referrer-Policy` 与 `Permissions-Policy`（加在应用内而非 nginx，避免碰共享代理的 `add_header` 继承）；雷达图例会写明"本帧缺 N 片"。
 
 **V1.1.4 主要变化**（2026-11-24，绕飞与裁决的口径对齐）：
 

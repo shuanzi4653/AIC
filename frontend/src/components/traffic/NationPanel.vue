@@ -183,6 +183,15 @@ const radarScale=computed(()=>{
 // 摆一把 12 格的尺反而量不到。后端也只在 nation 层下发 image，两边口径一致。
 const radarScaleShown=computed(()=>!!data.value?.radar?.image)
 
+// 缺片数：源站少发一张，贴图上就是一块空白。浏览器代取瓦片那条路已经关掉
+// （源站无 CORS 头，fetch 必然被拦），所以这里必须把"缺了几片"写出来，
+// 否则读者只会看到一个说不清的缺口（V1.1.5）。
+const missingTiles=computed(()=>{
+  const t=radarMeta.value.tilesInfo
+  if(!t) return 0
+  return Math.max(0, Number(t.asked||0)-Number(t.fetched||0))
+})
+
 const radarScaleTip=computed(()=>{
   const rows=radarScale.value
   if(!rows.length) return ''
@@ -190,7 +199,8 @@ const radarScaleTip=computed(()=>{
   const thr=data.value?.radar?.thresholdsDbz
   const tail=thr?`；${thr.convective} 以上需绕飞，${thr.strong} 以上禁止进入`:''
   const method=data.value?.radar?.virtual?'模拟回波（演示包）':'图像反演（估）· 非观测'
-  return `雷达反射率色阶（${method}）：${spans} dBZ${tail}`
+  const miss=missingTiles.value?`；本帧缺 ${missingTiles.value} 片（源站未发布，缺处不代表无回波）`:''
+  return `雷达反射率色阶（${method}）：${spans} dBZ${tail}${miss}`
 })
 
 const echoStats=computed(()=>radarMeta.value.stats||{truncated:false,totalRings:0,keptRings:0,cap:200})

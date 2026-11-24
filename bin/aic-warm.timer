@@ -1,0 +1,14 @@
+[Unit]
+Description=每天 08:05 与 12:05 预热 AIC 天窗智巡
+
+[Timer]
+# 用户要求：早 8 点、午 12 点各一次。取 05 分是为了避开整点的其他定时任务，
+# 否则几个任务同时起，2 核机器上又变成排队。
+OnCalendar=*-*-* 08,12:05:00
+# 机器重启错过了时间点，开机后补跑一次 —— 补跑的价值在于"确认接口可达"，
+# 帧与天气本身会自己更新。
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
