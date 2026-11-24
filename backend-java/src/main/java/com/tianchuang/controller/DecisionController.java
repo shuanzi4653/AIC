@@ -93,6 +93,18 @@ public class DecisionController {
     @GetMapping("/observations")
     public ResponseEntity<?> observations() throws Exception { return python.decisionRequest("/observations", null); }
 
+    /**
+     * 反事实预建（V1.1.6）。前端一进页面就静默调一次，把"建场 40–90 秒"提前吃掉。
+     * 空 body：Python 侧只认查询参数；这里显式发 POST，避免落到 decisionRequest 的 GET 分支。
+     */
+    @PostMapping("/traffic/v2/counterfactual/prewarm")
+    public ResponseEntity<?> counterfactualPrewarm(@RequestParam Map<String, String> params) throws Exception {
+        String query = params.entrySet().stream().map(e -> encode(e.getKey()) + "=" + encode(e.getValue()))
+                .collect(Collectors.joining("&"));
+        return python.decisionRequest("/traffic/v2/counterfactual/prewarm"
+                + (query.isEmpty() ? "" : "?" + query), Map.of());
+    }
+
     @GetMapping("/traffic/v2/{resource:overview|national|nation|corridors|modelcard|counterfactual|divergences|explain|constants}")
     public ResponseEntity<?> trafficV2(@PathVariable String resource,
                                        @RequestParam Map<String, String> params) throws Exception {

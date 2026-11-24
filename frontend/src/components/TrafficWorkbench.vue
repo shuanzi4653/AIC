@@ -4,6 +4,7 @@ import {requestJson,postAction,operatorRole,setOperatorRole} from '../api.js'
 import OperationsConsole from './OperationsConsole.vue'
 import {isCaseMode, caseQuery, caseMeta} from '../traffic/caseMode.js'
 import {isStage, STAGE} from '../traffic/stageMode.js'
+import {runPrefetch} from '../traffic/prefetch.js'
 import WeatherSourceSwitch from './traffic/WeatherSourceSwitch.vue'
 import NationPanel from './traffic/NationPanel.vue'
 import NationBriefing from './traffic/NationBriefing.vue'
@@ -738,6 +739,8 @@ onMounted(()=>{
   if(minute.value===480)playing.value=false
 },200)})
 onMounted(()=>{ tickWallClock(); wallTimer=setInterval(tickWallClock,1000) })
+// 打开页面就把后面几页要用到的载荷提前拉一遍（V1.1.6）。静默、空闲时跑、一个标签页一次。
+onMounted(()=>{ runPrefetch() })
 onUnmounted(()=>{
   clearInterval(wallTimer)
   if(relayRetryTimer)clearTimeout(relayRetryTimer);disposed=true;++generation;++weatherGeneration;window.removeEventListener('keydown',onGlobalKey);clearTimeout(poll);clearInterval(timer);clearInterval(buildClock)})

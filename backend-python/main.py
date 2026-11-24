@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import time
+import threading
 import logging
 import os
 from datetime import datetime
@@ -104,7 +105,6 @@ import terrain_tiles as _terrain_tiles  # noqa: E402
 app.include_router(_terrain_tiles.router)
 
 def _startup_warm():
-    import threading
 
     log = logging.getLogger(__name__)
 
@@ -703,6 +703,51 @@ def traffic_v2_counterfactual(seed: int = Query(42, ge=0, le=99999),
     from traffic import v2 as traffic_v2
     return traffic_v2.counterfactual(seed=seed, scenario=scenario, policy=policy,
                                      case_id=case or None, ablate=ablate)
+
+# 反事实预建（V1.1.6）。
+# 为什么要有它：反事实页首次打开要等"建场 + 对照计算"（实测 40–90 秒，日志页会显示
+# "重建 42% · 约剩 57 秒"）。用户打开页面时前端就静默调一次这个端点，把建场提前吃掉，
+# 等真正点开对照时多半已经 READY。
+#
+# 三条克制：
+#   ① 后台线程跑，请求线程立刻返回，不占连接、不占前端超时；
+#   ② 60 秒节流，同一个 (seed, scenario) 不重复触发 —— 否则几个人同时打开就是几次重算；
+#   ③ 只建"当前通道 + 当前帧"，不做定时轮询：帧一变计划本来就要重算，定时预建在 2 核机器上
+#      等于常年背着 25% 的 CPU 空转，不值。
+_CF_PREWARM_LOCK = threading.Lock()
+_CF_PREWARM_LAST: dict = {}
+_CF_PREWARM_SECONDS = 60.0
+
+
+@app.post('/traffic/v2/counterfactual/prewarm')
+def traffic_v2_counterfactual_prewarm(seed: int = Query(42, ge=0, le=99999),
+                                      scenario: str = Query('live', pattern='^(clear|unknown|live)$')):
+    from traffic import v2 as traffic_v2
+    from traffic import service as traffic_service
+
+    key = (seed, scenario)
+    now = time.time()
+    with _CF_PREWARM_LOCK:
+        last = _CF_PREWARM_LAST.get(key) or 0.0
+        if now - last < _CF_PREWARM_SECONDS:
+            return {'status': 'THROTTLED', 'note': '60 秒内已经预建过，不重复触发',
+                    'ageSeconds': round(now - last, 1)}
+        _CF_PREWARM_LAST[key] = now
+
+    session = traffic_service.session(seed, scenario)
+    if session.get('status') == 'READY':
+        return {'status': 'READY', 'note': '计划已就绪，无需预建'}
+
+    def build() -> None:
+        try:
+            with workspace.bind(''):
+                traffic_v2.counterfactual(seed=seed, scenario=scenario)
+        except Exception:  # noqa: BLE001 - 预建失败不影响任何对外行为
+            logging.getLogger(__name__).exception('counterfactual prewarm failed')
+
+    threading.Thread(target=build, name='cf-prewarm', daemon=True).start()
+    return {'status': 'PREWARMING', 'note': '已在后台建场；点开对照页时通常已就绪'}
+
 
 @app.get('/traffic/v2/divergences')
 def traffic_v2_divergences(limit: int = Query(50, ge=1, le=200)):
