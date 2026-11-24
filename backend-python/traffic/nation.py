@@ -591,9 +591,9 @@ def _virtual_detour_table(bucket: int) -> Dict[str, Dict[str, Any]]:
         for row in _corridor_rows():
             path = row.get('path') or [row['fromLonLat'], row['toLonLat']]
             got = _detour_for(path, avoid_xy)
-            if got:
+            if got and not got.get('negligible'):
                 table[row['id']] = got
-            elif _hit_km(path, avoid_xy) >= MIN_HIT_KM:   # 与真实模式同一门槛：擦边不算压线
+            elif not got and _hit_km(path, avoid_xy) >= MIN_HIT_KM:   # 与真实模式同一门槛
                 # 压线但小绕脱不开：这条航路此刻不成立，交给上层的"停飞"处理
                 blocked.add(row['id'])
     if len(_VIRTUAL_CACHE) > 96:      # 144 档全留着没有意义，按帧龄淘汰最旧的
@@ -606,7 +606,8 @@ def _virtual_detour_table(bucket: int) -> Dict[str, Dict[str, Any]]:
 # 压线判定的最小贯穿长度：航路与回波多边形的相交段短于这个值，视为"擦边"，既不绕飞也不封锁。
 # 起因（2026-11-24 实测）：NC-0212 只侧移 0.8 km 就被判"绕飞成功"；而真正压线绕不开的走廊，
 # 在真实模式里又因为 blocked_ids 恒空被当成直飞放行。两头都错，所以给一个统一的门槛。
-MIN_HIT_KM = 3.0
+MIN_HIT_KM = 3.0      # 贯穿不到 3 km 算擦边：不绕飞、不封锁
+MIN_SHIFT_KM = 3.0   # 只需偏 3 km 以内就能避开，说明本来就在边缘：按直飞处理，别画绕飞线
 
 
 def _hit_km(path: List[List[float]], avoid) -> float:
@@ -719,6 +720,12 @@ def _detour_for(path: List[List[float]], avoid) -> Optional[Dict[str, Any]]:
     if best is None:
         return None
     _, shifted = best
+    shift_km = round(best[0] / 1000.0, 1)
+    if shift_km < MIN_SHIFT_KM:
+        # 偏不到 3 km 就能避开 —— 本来就在回波边缘。画一条 0.8 km 的"绕飞航迹"
+        # 只会让人以为在躲什么；标成 negligible：不建表、不封锁、按直飞算。
+        return {'negligible': True, 'shiftKm': shift_km,
+                'hitKm': round(hit.length / 1000.0, 1)}
     coords = [list(to_ll.transform(x, y)) for x, y in shifted.coords]
     return {'path': [[round(lon, 4), round(lat, 4)] for lon, lat in coords],
             'shiftKm': round(best[0] / 1000.0, 1),
@@ -747,9 +754,9 @@ def _detour_table(radar_ts: str):
     for row in _corridor_rows():
         path = row.get('path') or [row['fromLonLat'], row['toLonLat']]
         got = _detour_for(path, avoid)
-        if got:
+        if got and not got.get('negligible'):
             table[row['id']] = got
-        elif _hit_km(path, avoid) >= MIN_HIT_KM:
+        elif not got and _hit_km(path, avoid) >= MIN_HIT_KM:
             blocked.add(row['id'])
     return table, blocked
 

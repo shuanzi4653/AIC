@@ -59,12 +59,14 @@ test('案例重放不再自动开跑：显式开始 + 有上限 + 可中止', ()
   assert.ok(CF.includes('data-cf-armed'), '没有"显式开始"的入口块')
 })
 
-test('版本号 1.1.3 五处一致', () => {
-  assert.equal(VERSION, '1.1.3')
-  assert.equal(PKG.version, '1.1.3')
+// 版本号不再写死在测试里：以 VERSION 为唯一基准，其余四处跟着它。
+// 写死过一次（'1.1.3'），升 1.1.4 时立刻假红。
+test('版本号五处一致（以 VERSION 为基准）', () => {
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/, 'VERSION 不是合法 semver')
+  assert.equal(PKG.version, VERSION, 'package.json 没跟上')
   const POM = read('../../backend-java/pom.xml')
-  assert.ok(POM.includes('<version>1.1.3</version>'), 'pom.xml 没跟上')
+  assert.ok(POM.includes(`<version>${VERSION}</version>`), 'pom.xml 没跟上')
   const LOCK = JSON.parse(read('../package-lock.json'))
-  assert.equal(LOCK.version, '1.1.3')
-  assert.equal(LOCK.packages[''].version, '1.1.3')
+  assert.equal(LOCK.version, VERSION, 'package-lock.version 没跟上')
+  assert.equal(LOCK.packages[''].version, VERSION, 'package-lock.packages[""] 没跟上')
 })
